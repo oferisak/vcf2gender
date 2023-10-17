@@ -1,0 +1,71 @@
+---
+title: "VCF 2 gender"
+author: "Ofer Isakov"
+date: '2023-10-03'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+analysis_setup_file<-'./config/template.analysis_setup.txt'
+knitr::opts_chunk$set(echo = TRUE)
+project_dir<-'/media/SSD/Bioinformatics/Projects/vcf2gender'
+setwd(project_dir)
+library(ProjectTemplate)
+load.project()
+```
+
+```{r prep_analysis}
+main_output_prefix<-analysis_setup$main_output_folder_prefix
+main_output_folder<-glue('./output/{main_output_prefix}.vcf2gender.{Sys.Date()}')
+if (!dir.exists(main_output_folder)){dir.create(main_output_folder)}
+
+system(glue('cp {analysis_setup_file} {main_output_folder}'))
+write.table(input_vcfs,file=glue('{main_output_folder}/vcf_files.txt'),row.names = F,sep='\t')
+```
+
+```{r run_analysis}
+all_vcfs_check_gender_output<-NULL
+for (i in 1:nrow(input_vcfs)){
+  vcf_name<-input_vcfs%>%slice(i)%>%pull(name)
+  message(glue('Analyzing {vcf_name}..'))
+  vcf_file<-normalizePath(input_vcfs%>%slice(i)%>%pull(file))
+  vcf_output_folder<-glue('{main_output_folder}/{vcf_name}')
+  if (!dir.exists(vcf_output_folder)){dir.create(vcf_output_folder)}
+  setwd(vcf_output_folder)
+  vcf_to_plink_ouput<-vcf_to_plink_bfiles(plink_path = analysis_setup$plink_path,
+                      vcf_file = vcf_file,
+                      bfiles_prefix = vcf_name,
+                      build = analysis_setup$build)
+  run_plink_check_sex(plink_path = analysis_setup$plink_path,
+                      bfiles_prefix = vcf_name)
+  check_sex_output_file<-glue('{vcf_name}.sexcheck')
+  # find the threshold between the female and male
+  first_check_sex_output<-parse_plink_check_sex_output(check_sex_output_file)
+  min_max_Fs<-first_check_sex_output%>%group_by(SNPSEX)%>%summarize(min_val=min(F),max_val=max(F))
+  mean_Fs<-first_check_sex_output%>%group_by(SNPSEX)%>%summarize(mean_val=mean(F))
+  # the female thresh is the max between 0.001 (cant be 0) and the actual minimal threshold
+  female_thresh<-max(0.001,min_max_Fs%>%filter(SNPSEX==2)%>%pull(max_val))
+  # the male threshold should be between the female and male (so as to be lower than the lowest male but higher than highest female)
+  male_thresh<-min_max_Fs%>%filter(SNPSEX!=2)%>%pull(min_val)
+  male_thresh=(male_thresh+female_thresh)/2
+  run_plink_check_sex(plink_path = analysis_setup$plink_path,
+                      bfiles_prefix = vcf_name,
+                      female_thresh = female_thresh,
+                      male_thresh = male_thresh)
+  second_check_sex_output<-parse_plink_check_sex_output(check_sex_output_file)
+  final_check_sex_output<-check_for_gender_outliers(second_check_sex_output)
+  all_vcfs_check_gender_output<-all_vcfs_check_gender_output%>%
+    bind_rows(
+      data.frame(vcf_name=vcf_name,
+                 final_check_sex_output%>%
+                   mutate(SNPSEX=case_when(
+                     SNPSEX==0~'U',
+                     SNPSEX==1~'M',
+                     SNPSEX==2~'F'
+                   )))
+    )
+  setwd(project_dir)
+}
+
+write.table(all_vcfs_check_gender_output,file=glue('{main_output_folder}/{main_output_prefix}.check_sex_outuput.{Sys.Date()}.txt'),sep='\t')
+```
