@@ -42,12 +42,14 @@ for (i in 1:nrow(input_vcfs)){
   # find the threshold between the female and male
   first_check_sex_output<-parse_plink_check_sex_output(check_sex_output_file)
   min_max_Fs<-first_check_sex_output%>%group_by(SNPSEX)%>%summarize(min_val=min(F),max_val=max(F))
-  mean_Fs<-first_check_sex_output%>%group_by(SNPSEX)%>%summarize(mean_val=mean(F))
+  mean_Fs<-first_check_sex_output%>%group_by(SNPSEX)%>%summarize(mean_val=mean(F),sd=sd(F))
   # the female thresh is the max between 0.001 (cant be 0) and the actual minimal threshold
   female_thresh<-max(0.001,min_max_Fs%>%filter(SNPSEX==2)%>%pull(max_val))
   # the male threshold should be between the female and male (so as to be lower than the lowest male but higher than highest female)
-  male_thresh<-min_max_Fs%>%filter(SNPSEX!=2)%>%pull(min_val)
-  male_thresh=(male_thresh+female_thresh)/2
+  # in this implementation the male threshold is two SD below the mean F
+  male_thresh<-mean_Fs%>%filter(SNPSEX==0)%>%pull(mean_val)-2*mean_Fs%>%filter(SNPSEX==0)%>%pull(sd)
+  #male_thresh<-min_max_Fs%>%filter(SNPSEX!=2)%>%pull(min_val)
+  #male_thresh=(male_thresh+female_thresh)/2
   run_plink_check_sex(plink_path = analysis_setup$plink_path,
                       bfiles_prefix = vcf_name,
                       female_thresh = female_thresh,
